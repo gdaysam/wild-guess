@@ -154,7 +154,7 @@ const PHOTO = id => "https://inaturalist-open-data.s3.amazonaws.com/photos/" + i
 const ROUNDS = 10, SECONDS = 15;
 const MODES = {
   birds: {label:"Birds", count:658, blurb:"From backyard robins to birds-of-paradise"},
-  fish:  {label:"Fish",  count:404,  blurb:"From bluegill to leafy seadragons"}
+  fish:  {label:"Fish",  count:403,  blurb:"From bluegill to leafy seadragons"}
 };
 let mode = "birds";
 try { const m = localStorage.getItem("fw-mode"); if (MODES[m]) mode = m; } catch(e) {}
