@@ -82,8 +82,9 @@ h1.name{font:800 clamp(32px,7vw,54px)/1 var(--display);letter-spacing:-.02em;mar
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .tile{position:relative;aspect-ratio:1;max-width:100%;border:0;padding:0;border-radius:6px;overflow:hidden;background:var(--line);
   box-shadow:0 0 0 1px var(--line)}
-.tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease, filter .25s}
-.tile:hover:not(:disabled) img{transform:scale(1.03)}
+/* --s/--o: per-photo crop that pushes a caption or watermark off one edge of the tile */
+.tile img{width:100%;height:100%;object-fit:cover;display:block;transform:scale(var(--s,1));transform-origin:var(--o,50% 50%);transition:transform .25s ease, filter .25s}
+.tile:hover:not(:disabled) img{transform:scale(calc(var(--s,1) * 1.03))}
 .tile .key{position:absolute;top:8px;left:8px;font:700 12px/1 var(--mono);background:var(--card);color:var(--ink);
   width:22px;height:22px;display:grid;place-items:center;border-radius:3px;opacity:.9}
 .tile .cap{position:absolute;inset:auto 0 0 0;padding:22px 10px 8px;font-weight:700;font-size:14px;line-height:1.2;color:#fff;
@@ -143,6 +144,12 @@ h1.name{font:800 clamp(32px,7vw,54px)/1 var(--display);letter-spacing:-.02em;mar
 
 <script>
 let SPECIES = [];   /* loaded per mode from data/<mode>.json */
+/* crop: edge letter + percent of the tile to cut, e.g. "b18" trims the bottom 18% (caption bands, watermarks) */
+const CROP_ORIGIN = {b:"50% 0%", t:"50% 100%", l:"100% 50%", r:"0% 50%"};
+function cropStyle(c){
+  const m = /^([btlr])(\d{1,2})$/.exec(c || "");
+  return m ? `--s:${(100/(100 - +m[2])).toFixed(3)};--o:${CROP_ORIGIN[m[1]]}` : "";
+}
 const PHOTO = id => "https://inaturalist-open-data.s3.amazonaws.com/photos/" + id.replace(".", "/medium.");
 const ROUNDS = 10, SECONDS = 15;
 const MODES = {
@@ -186,7 +193,7 @@ function buildRound(r, used){
   const same = shuffle(kin).slice(0, p.same);
   const others = shuffle(SPECIES.filter(b => b.family !== target.family || target.family === "misc"))
     .filter(b => b !== target && !same.includes(b)).slice(0, 3 - same.length);
-  const options = shuffle([target, ...same, ...others]).map(b => { const p = rand(b.ph); return {bird:b, photo:{src:PHOTO(p[0]), credit:p[1]}}; });
+  const options = shuffle([target, ...same, ...others]).map(b => { const p = rand(b.ph); return {bird:b, photo:{src:PHOTO(p[0]), credit:p[1], crop:p[2] || ""}}; });
   return {target, options, label:p.label};
 }
 
@@ -298,7 +305,7 @@ function play(){
   <div class="timer"><i id="bar"></i></div>
   <div class="grid" id="grid">${rd.options.map((o,k) => `
     <button class="tile" data-k="${k}" aria-label="Photo ${k+1}">
-      <img src="${o.photo.src}" alt="${MODES[run.mode].label} photo ${k+1}" decoding="async">
+      <img src="${o.photo.src}" style="${cropStyle(o.photo.crop)}" alt="${MODES[run.mode].label} photo ${k+1}" decoding="async">
       <span class="key">${k+1}</span><span class="cap">${esc(o.bird.name)}</span>
     </button>`).join("")}</div>
   <div class="feedback" id="fb"><span class="note label">Tap the ${esc(rd.target.name)}</span></div>`;
