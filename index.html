@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Fin &amp; Feather</title>
-<meta name="description" content="Name the species, pick its photo. Birds or fish, ten rounds, one leaderboard each.">
+<title>Wild Guess</title>
+<meta name="description" content="We name a species, you pick its photo out of four. Ten rounds, harder every round, a leaderboard for each mode.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap">
@@ -250,7 +250,7 @@ function home(){
   app.innerHTML = `
   <div class="hero">
     <span class="label">Ten rounds · one run</span>
-    <h1>Fin <em>&amp;</em> Feather</h1>
+    <h1>Wild <em>Guess</em></h1>
     <p>We name a species. You pick its photo out of four. Early rounds are easy; by round ten every choice is a lookalike from the same family.</p>
   </div>
   <div class="modes">${Object.entries(MODES).map(([k,v]) => `

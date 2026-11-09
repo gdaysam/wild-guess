@@ -1,6 +1,6 @@
-# Fin & Feather
+# Wild Guess
 
-A 10-round species ID game with two modes, **Birds** and **Fish**. Each round names a species; pick its photo out of four. Later rounds are lookalikes from the same family. Faster answers and later rounds score more (max 5,500). Each mode has its own leaderboard.
+A 10-round species ID game. Each animal group is a mode (currently **Birds** and **Fish**). Each round names a species; pick its photo out of four. Later rounds are lookalikes from the same family. Faster answers and later rounds score more (max 5,500). Each mode has its own leaderboard.
 
 ## How it's built
 

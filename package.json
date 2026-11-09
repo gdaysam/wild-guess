@@ -1,5 +1,5 @@
 {
-  "name": "four-wings",
+  "name": "wildguess",
   "private": true,
   "type": "module",
   "engines": { "node": "22.x" },
