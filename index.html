@@ -163,15 +163,15 @@ function buildRound(r, used){
 }
 
 /* ---------- leaderboard (Vercel function at /api/scores, runs stored in Vercel Blob) ---------- */
-let top = [], boardState = "loading", myName = "";
+let topRuns = [], boardState = "loading", myName = "";
 let localBest = 0;
 try { localBest = +localStorage.getItem("fw-best") || 0; myName = localStorage.getItem("fw-name") || ""; } catch(e) {}
 async function loadBoard(){
   try {
     const r = await fetch("/api/scores", {cache:"no-store"});
     if (!r.ok) throw new Error(r.status);
-    top = (await r.json()).top || []; boardState = "ready";
-  } catch(e) { boardState = top.length ? "ready" : "off"; }
+    topRuns = (await r.json()).top || []; boardState = "ready";
+  } catch(e) { boardState = topRuns.length ? "ready" : "off"; }
   rerenderBoard();
 }
 async function postScore(name, score, hits){
@@ -184,8 +184,8 @@ function boardHTML(){
   const me = myName.toLowerCase();
   if (boardState === "off") body = `<p class="note">Scores can't be reached right now. Your best on this device: <span class="mono">${fmt(localBest)}</span></p>`;
   else if (boardState === "loading") body = `<p class="note">Loading scores…</p>`;
-  else if (!top.length) body = `<p class="note">No runs yet. Finish a run to claim the top spot.</p>`;
-  else body = `<ol>${top.map((b,i) => { const mine = me && b.name.toLowerCase() === me; return `<li class="${mine?"me":""}"><span class="r mono">${i+1}</span><span>${esc(b.name)}${mine?" (you)":""}</span><span class="mono">${fmt(b.score)}</span></li>`; }).join("")}</ol>`;
+  else if (!topRuns.length) body = `<p class="note">No runs yet. Finish a run to claim the top spot.</p>`;
+  else body = `<ol>${topRuns.map((b,i) => { const mine = me && b.name.toLowerCase() === me; return `<li class="${mine?"me":""}"><span class="r mono">${i+1}</span><span>${esc(b.name)}${mine?" (you)":""}</span><span class="mono">${fmt(b.score)}</span></li>`; }).join("")}</ol>`;
   return `<section class="board" id="board"><h2>Top runs</h2>${body}</section>`;
 }
 function rerenderBoard(){ const el = document.getElementById("board"); if (el) el.outerHTML = boardHTML(); }
