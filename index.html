@@ -128,6 +128,17 @@ h1.name{font:800 clamp(32px,7vw,54px)/1 var(--display);letter-spacing:-.02em;mar
 .postform{display:flex;flex-direction:column;gap:8px}
 .postform input{font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--ink);border-radius:4px;padding:11px 12px;flex:1 1 180px;min-width:0}
 .postform input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.mode:disabled{cursor:default;opacity:.75;transform:none}
+.mode:disabled:hover{box-shadow:inset 0 0 0 1.5px var(--line)}
+.practice{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-top:2px solid var(--ink);padding-top:12px}
+.practice > div:first-child{display:flex;flex-direction:column;gap:2px}
+.practice strong{font:800 18px/1.2 var(--display)}
+.squares{display:flex;gap:4px}
+.squares i{width:22px;height:22px;border-radius:3px;background:var(--bad)}
+.squares i.ok{background:var(--good)}
+.share{display:flex;flex-direction:column;gap:10px}
+.share pre{margin:0;padding:12px 14px;background:var(--card);border:1px solid var(--line);border-radius:6px;font:500 14px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+.board > .note{margin:-4px 0 4px}
 .final{font:800 clamp(56px,14vw,96px)/1 var(--display);letter-spacing:-.03em}
 .log{width:100%;border-collapse:collapse;font-size:14px}
 .log td{padding:6px 4px;border-top:1px solid var(--line)}
@@ -143,7 +154,8 @@ h1.name{font:800 clamp(32px,7vw,54px)/1 var(--display);letter-spacing:-.02em;mar
 <div class="wrap" id="app"></div>
 
 <script>
-let SPECIES = [];   /* loaded per mode from data/<mode>.json */
+/* Wild Guess: one shared daily quiz per mode (from /api/daily) plus unlimited practice runs built in the browser. */
+let SPECIES = [];   /* practice only: loaded per mode from data/<mode>.json */
 /* crop: edge letter + percent of the tile to cut, e.g. "b18" trims the bottom 18% (caption bands, watermarks) */
 const CROP_ORIGIN = {b:"50% 0%", t:"50% 100%", l:"100% 50%", r:"0% 50%"};
 function cropStyle(c){
@@ -151,57 +163,70 @@ function cropStyle(c){
   return m ? `--s:${(100/(100 - +m[2])).toFixed(3)};--o:${CROP_ORIGIN[m[1]]}` : "";
 }
 const PHOTO = id => "https://inaturalist-open-data.s3.amazonaws.com/photos/" + id.replace(".", "/medium.");
-const ROUNDS = 10, SECONDS = 15;
+const ROUNDS = 10, SECONDS = 15, SITE = "wildguess.vercel.app";
 const MODES = {
   birds: {label:"Birds", count:658, blurb:"From backyard robins to birds-of-paradise"},
   fish:  {label:"Fish",  count:403,  blurb:"From bluegill to leafy seadragons"}
 };
-let mode = "birds";
-try { const m = localStorage.getItem("fw-mode"); if (MODES[m]) mode = m; } catch(e) {}
-const dataCache = {};
-function loadSpecies(m){
-  if (!dataCache[m]) dataCache[m] = fetch("data/" + m + ".json").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .catch(e => { delete dataCache[m]; throw e; });
-  return dataCache[m];
-}
-function setMode(m){ mode = m; document.documentElement.dataset.mode = m; try { localStorage.setItem("fw-mode", m); } catch(e) {} }
 const TIERS = {1:"Warm-up",2:"Field",3:"Tricky",4:"Expert"};
 const app = document.getElementById("app");
 const rand = a => a[Math.floor(Math.random()*a.length)];
 const shuffle = a => { a = a.slice(); for (let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmt = n => n.toLocaleString("en-US");
+const store = {
+  get(k){ try { return JSON.parse(localStorage.getItem(k)); } catch(e) { return null; } },
+  set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
+};
+const dayLabel = d => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", {month:"short", day:"numeric", timeZone:"UTC"});
+function untilText(ms){ const h = Math.floor(ms/3600e3), m = Math.floor(ms%3600e3/60e3); return h ? `${h}h ${m}m` : `${m}m`; }
+let myName = store.get("wg-name") || (()=>{ try { return localStorage.getItem("fw-name") || ""; } catch(e) { return ""; } })();
+let mode = ["birds","fish"].includes(store.get("wg-mode")) ? store.get("wg-mode") : "birds";
+function setMode(m){ mode = m; document.documentElement.dataset.mode = m; store.set("wg-mode", m); }
 
-/* ---------- difficulty ----------
-   Rounds 1–3: common backyard birds, decoys from unrelated families.
-   Middle rounds: less familiar targets, one or two lookalikes from the same family.
-   Rounds 8–10: hard species with three same-family lookalikes (Hairy vs Downy, Cooper's vs Sharp-shinned). */
+/* ---------- today's quizzes ---------- */
+const daily = {};            // mode -> {day, msLeft, status, quiz, loadedAt}
+async function loadDaily(m){
+  const r = await fetch("/api/daily?mode=" + m, {cache:"no-store"});
+  if (!r.ok) throw new Error(r.status);
+  const j = await r.json(); j.loadedAt = Date.now(); daily[m] = j; return j;
+}
+/* Local progress for today's run, so a reload resumes instead of starting over. */
+const runKey = m => "wg-daily-" + m;
+function todaysRun(m){ const s = store.get(runKey(m)); return s && daily[m] && s.day === daily[m].day ? s : null; }
+function saveRun(){ if (run && run.kind === "daily") store.set(runKey(run.mode), {day:run.day, i:run.i, score:run.score, log:run.log, pending:run.pending, done:run.done, posted:run.posted, postedName:run.postedName}); }
+
+/* ---------- practice rounds (random, built here) ---------- */
 const PLAN = [
   {tiers:[1],same:0,label:1},{tiers:[1],same:0,label:1},{tiers:[1],same:1,label:1},
   {tiers:[2],same:1,label:2},{tiers:[2],same:2,label:2},{tiers:[2,3],same:2,label:2},
   {tiers:[2,3],same:3,label:3},{tiers:[3],same:3,label:3},{tiers:[3],same:3,label:4},{tiers:[3],same:3,label:4}
 ];
 function familyOf(f){ return SPECIES.filter(b => b.family === f); }
-function buildRound(r, used){
+const toOption = (b, p) => ({bird:{name:b.name, sci:b.sci}, photo:{src:PHOTO(p[0]), credit:p[1], crop:p[2] || ""}});
+function buildPracticeRound(r, used){
   const p = PLAN[r];
   let pool = SPECIES.filter(b => !used.has(b.name) && p.tiers.includes(b.tier) &&
     (p.same === 0 || (b.family !== "misc" && familyOf(b.family).length - 1 >= p.same)));
   if (!pool.length) pool = SPECIES.filter(b => !used.has(b.name) && b.family !== "misc");
   const target = rand(pool);
-  const kin = shuffle(familyOf(target.family).filter(b => b !== target))
-    .sort((a,b) => b.tier - a.tier).slice(0, p.same + 1);       // favour hard lookalikes
+  const kin = shuffle(familyOf(target.family).filter(b => b !== target)).sort((a,b) => b.tier - a.tier).slice(0, p.same + 1);
   const same = shuffle(kin).slice(0, p.same);
   const others = shuffle(SPECIES.filter(b => b.family !== target.family || target.family === "misc"))
     .filter(b => b !== target && !same.includes(b)).slice(0, 3 - same.length);
-  const options = shuffle([target, ...same, ...others]).map(b => { const p = rand(b.ph); return {bird:b, photo:{src:PHOTO(p[0]), credit:p[1], crop:p[2] || ""}}; });
-  return {target, options, label:p.label};
+  const options = shuffle([target, ...same, ...others]).map(b => toOption(b, rand(b.ph)));
+  return {target:options.find(o => o.bird.name === target.name).bird, options, label:p.label};
+}
+/* Daily rounds come from the server in a fixed order; each player sees the tiles shuffled. */
+function dailyRounds(quiz){
+  return quiz.rounds.map(r => {
+    const options = shuffle(r.options.map(o => ({bird:{name:o.name, sci:o.sci}, photo:{src:PHOTO(o.photo[0]), credit:o.photo[1], crop:o.photo[2] || ""}})));
+    return {target:options.find(o => o.bird.name === r.target).bird, options, label:r.label};
+  });
 }
 
-/* ---------- leaderboard (Vercel function at /api/scores?mode=, runs stored in Vercel Blob) ---------- */
-let boards = {birds:[], fish:[]}, boardState = {birds:"loading", fish:"loading"}, boardMode = mode, myName = "";
-const bestKey = m => "fw-best-" + m;
-function localBest(m){ try { return +(localStorage.getItem(bestKey(m)) || (m === "birds" ? localStorage.getItem("fw-best") : 0)) || 0; } catch(e) { return 0; } }
-try { myName = localStorage.getItem("fw-name") || ""; } catch(e) {}
+/* ---------- leaderboard (today only) ---------- */
+let boards = {birds:[], fish:[]}, boardState = {birds:"loading", fish:"loading"}, boardMode = mode;
 async function loadBoard(m = boardMode){
   try {
     const r = await fetch("/api/scores?mode=" + m, {cache:"no-store"});
@@ -210,26 +235,128 @@ async function loadBoard(m = boardMode){
   } catch(e) { boardState[m] = boards[m].length ? "ready" : "off"; }
   rerenderBoard();
 }
-async function postScore(m, name, score, hits){
-  const r = await fetch("/api/scores", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode:m, name, score, hits})});
+async function postScore(){
+  const r = await fetch("/api/scores", {method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({mode:run.mode, day:run.day, name:run.postedName, score:run.score, hits:run.log.filter(l => l.ok).length})});
   const j = await r.json().catch(() => ({}));
+  if (r.status === 409) return "already";
   if (!r.ok) throw new Error(j.error || "Your score couldn't be posted. Try again.");
+  return "posted";
 }
 function boardHTML(withTabs = true){
   const m = boardMode, list = boards[m], st = boardState[m], me = myName.toLowerCase();
+  const day = daily[m] ? dayLabel(daily[m].day) : "today";
   let body;
-  if (st === "off") body = `<p class="note">Scores can't be reached right now. Your best on this device: <span class="mono">${fmt(localBest(m))}</span></p>`;
+  if (st === "off") body = `<p class="note">Scores can't be reached right now.</p>`;
   else if (st === "loading") body = `<p class="note">Loading scores…</p>`;
-  else if (!list.length) body = `<p class="note">Nobody has posted a ${MODES[m].label.toLowerCase()} score yet. Finish a run to claim the top spot.</p>`;
+  else if (!list.length) body = `<p class="note">No ${MODES[m].label.toLowerCase()} scores yet today. Finish today's quiz to take the top spot.</p>`;
   else body = `<ol>${list.map((b,i) => { const mine = me && b.name.toLowerCase() === me; return `<li class="${mine?"me":""}"><span class="r mono">${i+1}</span><span>${esc(b.name)}${mine?" (you)":""}</span><span class="mono">${fmt(b.score)}</span></li>`; }).join("")}</ol>`;
   const tabs = withTabs ? `<div class="seg" role="group" aria-label="Leaderboard">${Object.keys(MODES).map(k => `<button type="button" data-board="${k}" aria-pressed="${k===m}">${MODES[k].label}</button>`).join("")}</div>` : "";
-  return `<section class="board" id="board"><div class="head"><h2>${withTabs ? "Top runs" : MODES[m].label + " · top runs"}</h2>${tabs}</div>${body}</section>`;
+  return `<section class="board" id="board"><div class="head"><h2>${withTabs ? "Today's leaderboard" : MODES[m].label + " · today's leaderboard"}</h2>${tabs}</div><p class="note">${day} · resets at 4am Eastern</p>${body}</section>`;
 }
 function rerenderBoard(){ const el = document.getElementById("board"); if (!el) return; el.outerHTML = boardHTML(!run); wireBoard(); }
 function wireBoard(){ document.querySelectorAll("[data-board]").forEach(b => b.onclick = () => { boardMode = b.dataset.board; rerenderBoard(); if (boardState[boardMode] !== "ready") loadBoard(boardMode); }); }
 
-/* ---------- game ---------- */
-let run = null, timerId = null;
+/* ---------- screens ---------- */
+let run = null, timerId = null, rolloverTimer = null;
+function errorScreen(label, msg, retry){
+  app.innerHTML = `<div class="hero"><span class="label">${esc(label)}</span><p>${esc(msg)}</p><div class="row"><button class="btn" id="retry">Try again</button><button class="btn alt" id="home">Home</button></div></div>`;
+  document.getElementById("retry").onclick = retry; document.getElementById("home").onclick = home;
+}
+
+function dailyCard(k){
+  const v = MODES[k], d = daily[k], s = d && todaysRun(k);
+  let tag = "Today", status = `${v.count} species. ${v.blurb}.`, action = "play";
+  if (!d) { status = "Loading today's quiz…"; action = "none"; }
+  else if (s && s.done) { tag = "Played"; action = "results"; status = `${s.log.filter(l => l.ok).length}/10 · ${fmt(s.score)} points${s.posted ? "" : " · not posted yet"}. See your results.`; }
+  else if (s) { tag = "Resume"; action = "resume"; status = `You're on round ${Math.min(s.i + 1 + (s.pending === s.i ? 1 : 0), ROUNDS)} of 10.`; }
+  else if (d.status) { tag = "Played"; action = "none"; status = "You've already played today's quiz on this browser."; }
+  return `<button class="mode ${k}" data-daily="${k}" data-action="${action}" ${action === "none" ? "disabled" : ""}><i>${tag}</i><strong>${v.label}</strong><span>${status}</span></button>`;
+}
+
+async function home(){
+  run = null; clearInterval(timerId); clearTimeout(rolloverTimer); boardMode = mode;
+  document.documentElement.dataset.mode = mode;
+  const render = () => {
+    const left = daily.birds ? daily.birds.msLeft - (Date.now() - daily.birds.loadedAt) : null;
+    app.innerHTML = `
+    <div class="hero">
+      <span class="label">Daily quiz${daily.birds ? " · " + dayLabel(daily.birds.day) : ""}</span>
+      <h1>Wild <em>Guess</em></h1>
+      <p>Everyone gets the same ten photos today. We name a species, you pick its photo out of four, and by round ten every choice is a lookalike. One try per day.</p>
+    </div>
+    <div class="modes">${Object.keys(MODES).map(dailyCard).join("")}</div>
+    <p class="note">${left != null ? `Next quiz in <span class="mono">${untilText(Math.max(0,left))}</span> · 4am Eastern` : ""}</p>
+    ${boardHTML()}
+    <section class="practice">
+      <div><strong>Practice</strong><span class="note">Unlimited random runs. Not on the leaderboard.</span></div>
+      <div class="row">${Object.entries(MODES).map(([k,v]) => `<button class="btn alt" data-practice="${k}">${v.label}</button>`).join("")}</div>
+    </section>
+    <div class="steps">
+      <div><strong>Read the name</strong>Each round shows one species name.</div>
+      <div><strong>Pick fast</strong>${SECONDS} seconds per round. Answering quicker earns more. Keys 1–4 work too.</div>
+      <div><strong>Climb the board</strong>Later rounds are worth more, up to ${fmt(5500)} a run. Birds and fish have separate daily boards.</div>
+    </div>`;
+    document.querySelectorAll("[data-daily]").forEach(b => b.onclick = () => {
+      const k = b.dataset.daily, a = b.dataset.action;
+      if (a === "play") startDaily(k); else if (a === "resume") resumeDaily(k); else if (a === "results") showDailyResults(k);
+    });
+    document.querySelectorAll("[data-practice]").forEach(b => b.onclick = () => startPractice(b.dataset.practice));
+    wireBoard();
+  };
+  render();
+  loadBoard(mode);
+  await Promise.all(Object.keys(MODES).map(k => loadDaily(k).catch(() => null)));
+  if (run) return;
+  render();
+  const left = daily.birds && daily.birds.msLeft;
+  if (left) rolloverTimer = setTimeout(() => { if (!run) home(); }, left + 2000);   // new quiz at 4am
+}
+
+async function startDaily(m){
+  setMode(m); boardMode = m;
+  app.innerHTML = `<div class="hero"><span class="label">${MODES[m].label} · daily</span><p>Starting today's quiz…</p></div>`;
+  try {
+    const d = daily[m] || await loadDaily(m);
+    const r = await fetch("/api/daily", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode:m})});
+    if (r.status === 409) { await loadDaily(m); return home(); }
+    if (!r.ok) throw new Error(r.status);
+    run = {kind:"daily", mode:m, day:d.day, rounds:dailyRounds(d.quiz), i:0, score:0, log:[], pending:null, done:false, posted:false, postedName:""};
+    saveRun(); preload(run.rounds[1]); show();
+  } catch(e) { errorScreen(MODES[m].label, "Today's quiz didn't load. Check your connection, then try again.", () => startDaily(m)); }
+}
+async function resumeDaily(m){
+  setMode(m); boardMode = m;
+  try {
+    const d = await loadDaily(m), s = todaysRun(m);
+    if (!s) return home();
+    run = {kind:"daily", mode:m, day:d.day, rounds:dailyRounds(d.quiz), i:s.i, score:s.score, log:s.log, pending:s.pending, done:s.done, posted:s.posted, postedName:s.postedName || ""};
+    if (run.pending === run.i) {                 // left mid-round: that round counts as a miss
+      run.log.push({name:run.rounds[run.i].target.name, ok:false, pts:0, picked:null, left:true});
+      run.i++; run.pending = null;
+    }
+    if (run.i >= ROUNDS) { run.done = true; saveRun(); return finish(); }
+    saveRun(); show();
+  } catch(e) { errorScreen(MODES[m].label, "Today's quiz didn't load. Check your connection, then try again.", () => resumeDaily(m)); }
+}
+async function showDailyResults(m){
+  try { await loadDaily(m); } catch(e) {}
+  const s = todaysRun(m); if (!s) return home();
+  setMode(m); boardMode = m;
+  run = {kind:"daily", mode:m, day:s.day, rounds:[], i:s.i, score:s.score, log:s.log, pending:null, done:true, posted:s.posted, postedName:s.postedName || ""};
+  finish();
+}
+async function startPractice(m){
+  setMode(m); boardMode = m;
+  app.innerHTML = `<div class="hero"><span class="label">${MODES[m].label} · practice</span><p>Loading species…</p></div>`;
+  try { SPECIES = await (await fetch("data/" + m + ".json")).json(); }
+  catch(e) { return errorScreen(MODES[m].label, "The species list didn't load. Check your connection, then try again.", () => startPractice(m)); }
+  const used = new Set(), rounds = [];
+  for (let r=0;r<ROUNDS;r++){ const rd = buildPracticeRound(r, used); used.add(rd.target.name); rounds.push(rd); }
+  run = {kind:"practice", mode:m, rounds, i:0, score:0, log:[]};
+  preload(rounds[1]); show();
+}
+
 async function prepare(round){
   if (round.ready) return;
   let failed = 0;
@@ -237,64 +364,24 @@ async function prepare(round){
   if (failed) throw new Error("photo");
   round.ready = true;
 }
-function preload(round){ prepare(round).catch(() => {}); }
+function preload(round){ if (round) prepare(round).catch(() => {}); }
 async function show(){
   const rd = run.rounds[run.i];
   if (!rd.ready) {
     app.innerHTML = `<div class="hero"><span class="label">Round ${run.i+1}</span><p>Loading photos…</p></div>`;
     try { await prepare(rd); }
-    catch(e) {
-      app.innerHTML = `<div class="hero"><span class="label">Round ${run.i+1}</span><p>The photos didn't load. Check your connection, then try again.</p><div class="row"><button class="btn" id="retry">Try again</button><button class="btn alt" id="home">Home</button></div></div>`;
-      document.getElementById("retry").onclick = show; document.getElementById("home").onclick = home; return;
-    }
+    catch(e) { return errorScreen("Round " + (run.i+1), "The photos didn't load. Check your connection, then try again.", show); }
   }
   play();
 }
-
-function home(){
-  run = null; clearInterval(timerId); boardMode = mode;
-  document.documentElement.dataset.mode = mode;
-  app.innerHTML = `
-  <div class="hero">
-    <span class="label">Ten rounds · one run</span>
-    <h1>Wild <em>Guess</em></h1>
-    <p>We name a species. You pick its photo out of four. Early rounds are easy; by round ten every choice is a lookalike from the same family.</p>
-  </div>
-  <div class="modes">${Object.entries(MODES).map(([k,v]) => `
-    <button class="mode ${k}" data-mode="${k}"><i>Play</i><strong>${v.label}</strong><span>${v.count} species. ${v.blurb}.</span></button>`).join("")}
-  </div>
-  <div class="steps">
-    <div><strong>Read the name</strong>Each round shows one species name.</div>
-    <div><strong>Pick fast</strong>${SECONDS} seconds per round. Answering quicker earns more.</div>
-    <div><strong>Climb the board</strong>Later rounds are worth more. A perfect run tops out at ${fmt(5500)}. Birds and fish keep separate boards.</div>
-  </div>
-  <span class="note label">Keys 1–4 to answer</span>
-  ${boardHTML()}`;
-  document.querySelectorAll(".mode").forEach(b => b.onclick = () => start(b.dataset.mode));
-  wireBoard();
-  loadBoard(mode);
-}
-
-async function start(m = mode){
-  setMode(m); boardMode = m;
-  app.innerHTML = `<div class="hero"><span class="label">${MODES[m].label}</span><p>Loading species…</p></div>`;
-  try { SPECIES = await loadSpecies(m); }
-  catch(e) {
-    app.innerHTML = `<div class="hero"><span class="label">${MODES[m].label}</span><p>The species list didn't load. Check your connection, then try again.</p><div class="row"><button class="btn" id="retry">Try again</button><button class="btn alt" id="home">Home</button></div></div>`;
-    document.getElementById("retry").onclick = () => start(m); document.getElementById("home").onclick = home; return;
-  }
-  const used = new Set(), rounds = [];
-  for (let r=0;r<ROUNDS;r++){ const rd = buildRound(r, used); used.add(rd.target.name); rounds.push(rd); }
-  run = {mode:m, rounds, i:0, score:0, log:[]};
-  preload(rounds[1]);
-  show();
-}
+const modeTag = () => `${MODES[run.mode].label} · ${run.kind === "daily" ? "Daily " + dayLabel(run.day) : "Practice"}`;
 
 function play(){
   const rd = run.rounds[run.i], r = run.i + 1;
-  if (run.rounds[run.i+1]) preload(run.rounds[run.i+1]);
+  preload(run.rounds[run.i+1]);
+  if (run.kind === "daily") { run.pending = run.i; saveRun(); }
   app.innerHTML = `
-  <div class="bar"><span class="brand">${MODES[run.mode].label}</span>
+  <div class="bar"><span class="brand">${modeTag()}</span>
     <div class="scorebox"><span class="label">Round <span class="mono">${r}/${ROUNDS}</span></span><span class="mono" id="score">${fmt(run.score)}</span></div></div>
   <div class="track">${run.rounds.map((_,k) => `<span class="${k<run.i?(run.log[k].ok?"ok":"miss"):k===run.i?"now":""}"></span>`).join("")}</div>
   <div class="prompt">
@@ -325,11 +412,13 @@ function answer(k){
   run.locked = true; clearInterval(timerId);
   const rd = run.rounds[run.i], r = run.i + 1;
   const elapsed = (performance.now() - run.t0)/1000;
-  const correctIdx = rd.options.findIndex(o => o.bird === rd.target);
+  const correctIdx = rd.options.findIndex(o => o.bird.name === rd.target.name);
   const ok = k === correctIdx;
   const pts = ok ? Math.round(100*r*(0.5 + 0.5*Math.max(0, 1 - elapsed/SECONDS))) : 0;
   run.score += pts;
   run.log.push({name:rd.target.name, ok, pts, picked: k>=0 ? rd.options[k].bird.name : null});
+  const last = run.i === ROUNDS - 1;
+  if (run.kind === "daily") { run.pending = null; run.i++; if (last) run.done = true; saveRun(); run.i--; }
 
   const grid = document.getElementById("grid");
   grid.classList.add("revealed");
@@ -340,7 +429,6 @@ function answer(k){
   });
   document.getElementById("score").textContent = fmt(run.score);
   document.getElementById("sci").textContent = rd.target.sci;
-  const last = run.i === ROUNDS - 1;
   const verdict = ok ? `Got it · +${pts}` : k < 0 ? "Time's up" : `That's a ${rd.options[k].bird.name}`;
   document.getElementById("fb").innerHTML = `
     <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
@@ -353,49 +441,79 @@ function answer(k){
   nx.focus({preventScroll:true});
 }
 
-async function finish(){
-  const hits = run.log.filter(l => l.ok).length, score = run.score, m = run.mode;
-  const prevBest = localBest(m);
+function shareText(){
+  const hits = run.log.filter(l => l.ok).length;
+  return `Wild Guess · ${MODES[run.mode].label} · ${dayLabel(run.day)}\n${hits}/10 · ${fmt(run.score)} pts\n${run.log.map(l => l.ok ? "🟩" : "🟥").join("")}\n${SITE}`;
+}
+async function share(btn, msg){
+  const text = shareText();
+  if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+    try { await navigator.share({text}); return; } catch(e) { if (e && e.name === "AbortError") return; }
+  }
+  try { await navigator.clipboard.writeText(text); msg.textContent = "Copied. Paste it into a text or group chat."; }
+  catch(e) {
+    const box = document.getElementById("sharebox"); const range = document.createRange(); range.selectNodeContents(box);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    msg.textContent = "Selected. Copy it with your keyboard or the copy menu.";
+  }
+}
+
+function finish(){
+  clearInterval(timerId);
+  const hits = run.log.filter(l => l.ok).length, score = run.score, m = run.mode, isDaily = run.kind === "daily";
+  const postBlock = !isDaily ? `<p class="note">Practice run · not on the leaderboard.</p>`
+    : run.posted ? `<p class="verdict ok">Posted as ${esc(run.postedName)}.</p>`
+    : `<form class="postform" id="postform" novalidate>
+        <label class="label" for="player">Name for today's leaderboard</label>
+        <div class="row"><input id="player" name="player" maxlength="20" autocomplete="nickname" placeholder="Your name" value="${esc(myName)}"><button class="btn" id="postbtn" type="submit">Post score</button></div>
+        <p class="note" id="postmsg"></p>
+      </form>`;
   app.innerHTML = `
-  <div class="bar"><span class="brand">${MODES[run.mode].label}</span><span class="label">Run complete</span></div>
+  <div class="bar"><span class="brand">${modeTag()}</span><span class="label">Run complete</span></div>
   <div class="hero" style="gap:6px">
     <span class="label">Final score · ${hits}/10 correct</span>
     <div class="final mono">${fmt(score)}</div>
-    <p>${score > prevBest ? "New personal best." : `Your best is ${fmt(prevBest)}.`}</p>
+    ${isDaily ? `<div class="squares" aria-label="${hits} of 10 correct">${run.log.map(l => `<i class="${l.ok?"ok":"miss"}"></i>`).join("")}</div>` : ""}
   </div>
-  <form class="postform" id="postform" novalidate>
-    <label class="label" for="player">Name for the leaderboard</label>
-    <div class="row"><input id="player" name="player" maxlength="20" autocomplete="nickname" placeholder="Your name" value="${esc(myName)}"><button class="btn" id="postbtn" type="submit">Post score</button></div>
-    <p class="note" id="postmsg"></p>
-  </form>
-  <div class="row"><button class="btn big" id="again">Play again</button><button class="btn alt" id="home">Home</button></div>
-  ${boardHTML(false)}
-  <section><span class="label">Your run</span>
+  ${postBlock}
+  ${isDaily ? `<section class="share">
+    <pre id="sharebox">${esc(shareText())}</pre>
+    <div class="row"><button class="btn big" id="sharebtn">Share result</button><span class="note" id="sharemsg"></span></div>
+  </section>` : ""}
+  <div class="row">${isDaily ? "" : `<button class="btn big" id="again">Play again</button>`}<button class="btn alt" id="home">Home</button>${isDaily ? `<button class="btn alt" id="practice">Practice ${MODES[m].label.toLowerCase()}</button>` : ""}</div>
+  ${isDaily ? boardHTML(false) : ""}
+  ${run.log.length ? `<section><span class="label">Your run</span>
   <table class="log"><tbody>${run.log.map((l,i) => `<tr>
     <td class="mono" style="color:var(--muted);width:2em">${i+1}</td>
-    <td>${esc(l.name)}${!l.ok?`<div class="credit">${l.picked?"Picked "+esc(l.picked):"Ran out of time"}</div>`:""}</td>
-    <td class="mono ${l.ok?"y":"x"}">${l.ok?"+"+fmt(l.pts):"0"}</td></tr>`).join("")}</tbody></table></section>`;
-  document.getElementById("again").onclick = () => start(m);
+    <td>${esc(l.name)}${!l.ok?`<div class="credit">${l.left?"Left mid-round":l.picked?"Picked "+esc(l.picked):"Ran out of time"}</div>`:""}</td>
+    <td class="mono ${l.ok?"y":"x"}">${l.ok?"+"+fmt(l.pts):"0"}</td></tr>`).join("")}</tbody></table></section>` : ""}`;
   document.getElementById("home").onclick = home;
-  try { if (score > prevBest) localStorage.setItem(bestKey(m), String(score)); } catch(e) {}
-  const form = document.getElementById("postform"), msg = document.getElementById("postmsg"), btn = document.getElementById("postbtn");
-  form.onsubmit = async e => {
-    e.preventDefault();
-    const name = document.getElementById("player").value.trim();
-    if (!name) { msg.textContent = "Enter a name first."; msg.style.color = "var(--bad)"; return; }
-    btn.disabled = true; msg.style.color = ""; msg.textContent = "Posting…";
-    try {
-      await postScore(m, name, score, hits);
-      myName = name; try { localStorage.setItem("fw-name", name); } catch(e) {}
-      form.innerHTML = `<p class="verdict ok">Posted as ${esc(name)}.</p>`;
-      loadBoard(m);
-    } catch(err) { btn.disabled = false; msg.textContent = err.message; msg.style.color = "var(--bad)"; }
-  };
+  if (!isDaily) { document.getElementById("again").onclick = () => startPractice(m); return; }
+  document.getElementById("practice").onclick = () => startPractice(m);
+  const sbtn = document.getElementById("sharebtn"), smsg = document.getElementById("sharemsg");
+  sbtn.onclick = () => share(sbtn, smsg);
+  const form = document.getElementById("postform");
+  if (form) {
+    const msg = document.getElementById("postmsg"), btn = document.getElementById("postbtn");
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const name = document.getElementById("player").value.trim();
+      if (!name) { msg.textContent = "Enter a name first."; msg.style.color = "var(--bad)"; return; }
+      btn.disabled = true; msg.style.color = ""; msg.textContent = "Posting…";
+      try {
+        run.postedName = name; myName = name; store.set("wg-name", name);
+        const res = await postScore();
+        run.posted = true; saveRun();
+        form.outerHTML = `<p class="verdict ok">${res === "already" ? "Already posted from this browser today." : "Posted as " + esc(name) + "."}</p>`;
+        loadBoard(m);
+      } catch(err) { btn.disabled = false; msg.textContent = err.message; msg.style.color = "var(--bad)"; }
+    };
+  }
   loadBoard(m);
 }
 
 document.addEventListener("keydown", e => {
-  if (!run || e.metaKey || e.ctrlKey) return;
+  if (!run || !run.rounds.length || e.metaKey || e.ctrlKey) return;
   if (!run.locked && "1234".includes(e.key)) answer(+e.key - 1);
 });
 home();

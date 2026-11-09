@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/daily.js": { "includeFiles": "data/**" }
+  }
+}
