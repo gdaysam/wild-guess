@@ -139,6 +139,10 @@ h1.name{font:800 clamp(32px,7vw,54px)/1 var(--display);letter-spacing:-.02em;mar
 .share{display:flex;flex-direction:column;gap:10px}
 .share pre{margin:0;padding:12px 14px;background:var(--card);border:1px solid var(--line);border-radius:6px;font:500 14px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
 .board > .note{margin:-4px 0 4px}
+.whoami{display:flex;justify-content:space-between;gap:4px 12px;flex-wrap:wrap}
+.whoami .note{margin:0}
+.link{border:0;background:none;padding:0;color:var(--ink);text-decoration:underline;text-underline-offset:2px;font:inherit;cursor:pointer}
+.askname{font:800 clamp(26px,6vw,36px)/1.1 var(--display);letter-spacing:-.02em;margin:0;text-wrap:balance}
 .final{font:800 clamp(56px,14vw,96px)/1 var(--display);letter-spacing:-.03em}
 .log{width:100%;border-collapse:collapse;font-size:14px}
 .log td{padding:6px 4px;border-top:1px solid var(--line)}
@@ -181,7 +185,12 @@ const store = {
 };
 const dayLabel = d => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", {month:"short", day:"numeric", timeZone:"UTC"});
 function untilText(ms){ const h = Math.floor(ms/3600e3), m = Math.floor(ms%3600e3/60e3); return h ? `${h}h ${m}m` : `${m}m`; }
-let myName = store.get("wg-name") || (()=>{ try { return localStorage.getItem("fw-name") || ""; } catch(e) { return ""; } })();
+/* The leaderboard name lives in a cookie (wg_name) for a year; older saved names are moved into it once. */
+const validName = n => { n = String(n || "").trim(); return n.length > 0 && n.length <= 20 && /[\p{L}\p{N}]/u.test(n); };
+function readNameCookie(){ const m = document.cookie.match(/(?:^|;\s*)wg_name=([^;]*)/); try { return m ? decodeURIComponent(m[1]) : ""; } catch(e) { return ""; } }
+function saveName(n){ myName = n.trim(); document.cookie = `wg_name=${encodeURIComponent(myName)}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`; }
+let myName = readNameCookie();
+if (!myName) { let old = ""; try { old = store.get("wg-name") || localStorage.getItem("fw-name") || ""; } catch(e) {} if (validName(old)) saveName(old); }
 let mode = ["birds","fish"].includes(store.get("wg-mode")) ? store.get("wg-mode") : "birds";
 function setMode(m){ mode = m; document.documentElement.dataset.mode = m; store.set("wg-mode", m); }
 
@@ -195,7 +204,7 @@ async function loadDaily(m){
 /* Local progress for today's run, so a reload resumes instead of starting over. */
 const runKey = m => "wg-daily-" + m;
 function todaysRun(m){ const s = store.get(runKey(m)); return s && daily[m] && s.day === daily[m].day ? s : null; }
-function saveRun(){ if (run && run.kind === "daily") store.set(runKey(run.mode), {day:run.day, i:run.i, score:run.score, log:run.log, pending:run.pending, done:run.done, posted:run.posted, postedName:run.postedName}); }
+function saveRun(){ if (run && run.kind === "daily") store.set(runKey(run.mode), {day:run.day, i:run.i, score:run.score, log:run.log, pending:run.pending, done:run.done, posted:run.posted, postedName:run.postedName, postFailed:run.postFailed}); }
 
 /* ---------- practice rounds (random, built here) ---------- */
 const PLAN = [
@@ -236,13 +245,25 @@ async function loadBoard(m = boardMode){
   } catch(e) { boardState[m] = boards[m].length ? "ready" : "off"; }
   rerenderBoard();
 }
-async function postScore(){
-  const r = await fetch("/api/scores", {method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mode:run.mode, day:run.day, name:run.postedName, score:run.score, hits:run.log.filter(l => l.ok).length})});
-  const j = await r.json().catch(() => ({}));
-  if (r.status === 409) return "already";
-  if (!r.ok) throw new Error(j.error || "Your score couldn't be posted. Try again.");
-  return "posted";
+/* Posts a finished daily run under the saved name and marks it posted. Called automatically, never by a button. */
+const posting = {};
+async function postRun(m, rec){
+  if (!rec || !rec.done || rec.posted || rec.postFailed || !myName) return false;
+  if (posting[m]) return posting[m];
+  posting[m] = (async () => {
+    const r = await fetch("/api/scores", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({mode:m, day:rec.day, name:myName, score:rec.score, hits:rec.log.filter(l => l.ok).length})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 409) {
+      const msg = j.error || "Your score couldn't be posted.";
+      if (r.status === 400 || r.status === 403) { rec.postFailed = msg; if (run === rec) saveRun(); else store.set(runKey(m), rec); }
+      throw new Error(msg);
+    }
+    rec.posted = true; rec.postedName = myName; delete rec.postFailed;
+    if (run === rec) saveRun(); else store.set(runKey(m), rec);
+    return true;
+  })().finally(() => { delete posting[m]; });
+  return posting[m];
 }
 function boardHTML(withTabs = true){
   const m = boardMode, list = boards[m], st = boardState[m], me = myName.toLowerCase();
@@ -269,7 +290,7 @@ function dailyCard(k){
   const v = MODES[k], d = daily[k], s = d && todaysRun(k);
   let tag = "Today", status = `${v.count} species. ${v.blurb}.`, action = "play";
   if (!d) { status = "Loading today's quiz…"; action = "none"; }
-  else if (s && s.done) { tag = "Played"; action = "results"; status = `${s.log.filter(l => l.ok).length}/10 · ${fmt(s.score)} points${s.posted ? "" : " · not posted yet"}. See your results.`; }
+  else if (s && s.done) { tag = "Played"; action = "results"; status = `${s.log.filter(l => l.ok).length}/10 · ${fmt(s.score)} points${s.posted ? "" : s.postFailed ? " · couldn't be posted" : myName ? " · posting…" : " · add your name to post it"}. See your results.`; }
   else if (s) { tag = "Resume"; action = "resume"; status = `You're on round ${Math.min(s.i + 1 + (s.pending === s.i ? 1 : 0), ROUNDS)} of 10.`; }
   else if (d.status) { tag = "Played"; action = "none"; status = "You've already played today's quiz on this browser."; }
   return `<button class="mode ${k}" data-daily="${k}" data-action="${action}" ${action === "none" ? "disabled" : ""}><i>${tag}</i><strong>${named(k)}</strong><span>${status}</span></button>`;
@@ -287,7 +308,10 @@ async function home(){
       <p>Everyone gets the same ten photos today. We name a species, you pick its photo out of four, and by round ten every choice is a lookalike. One try per day.</p>
     </div>
     <div class="modes">${Object.keys(MODES).map(dailyCard).join("")}</div>
-    <p class="note">${left != null ? `Next quiz in <span class="mono">${untilText(Math.max(0,left))}</span> · 4am Eastern` : ""}</p>
+    <div class="whoami">
+      <p class="note">${left != null ? `Next quiz in <span class="mono">${untilText(Math.max(0,left))}</span> · 4am Eastern` : ""}</p>
+      <p class="note">${myName ? `Playing as <strong>${esc(myName)}</strong> · <button type="button" class="link" id="rename">Change name</button>` : `<button type="button" class="link" id="rename">Set your leaderboard name</button>`}</p>
+    </div>
     ${boardHTML()}
     <section class="practice">
       <div><strong>Practice</strong><span class="note">Unlimited random runs. Not on the leaderboard.</span></div>
@@ -303,6 +327,7 @@ async function home(){
       if (a === "play") startDaily(k); else if (a === "resume") resumeDaily(k); else if (a === "results") showDailyResults(k);
     });
     document.querySelectorAll("[data-practice]").forEach(b => b.onclick = () => startPractice(b.dataset.practice));
+    document.getElementById("rename").onclick = () => askName({label:"Leaderboard name", button:"Save", back:home, done:home});
     wireBoard();
   };
   render();
@@ -310,11 +335,43 @@ async function home(){
   await Promise.all(Object.keys(MODES).map(k => loadDaily(k).catch(() => null)));
   if (run) return;
   render();
+  // A finished run that never reached the board (closed tab, lost connection) posts itself now.
+  const pending = Object.keys(MODES).filter(k => { const s = todaysRun(k); return s && s.done && !s.posted && !s.postFailed; });
+  if (pending.length && myName) {
+    await Promise.all(pending.map(k => postRun(k, todaysRun(k)).catch(() => null)));
+    if (run) return;
+    render(); loadBoard(boardMode);
+  }
   const left = daily.birds && daily.birds.msLeft;
   if (left) rolloverTimer = setTimeout(() => { if (!run) home(); }, left + 2000);   // new quiz at 4am
 }
 
+function askName({label, button, back, done}){
+  run = null; clearInterval(timerId);
+  app.innerHTML = `
+  <div class="hero">
+    <span class="label">${esc(label)}</span>
+    <h2 class="askname">What name should go on the leaderboard?</h2>
+    <p>Daily scores post automatically under this name. It's saved on this device, and you can change it any time from the home screen.</p>
+  </div>
+  <form class="postform" id="nameform" novalidate>
+    <label class="label" for="player">Your name</label>
+    <div class="row"><input id="player" name="player" maxlength="20" autocomplete="nickname" placeholder="Your name" value="${esc(myName)}"><button class="btn big" type="submit">${esc(button)}</button></div>
+    <p class="note" id="namemsg"></p>
+  </form>
+  <div class="row"><button class="btn alt" id="back">Back</button></div>`;
+  const input = document.getElementById("player"), msg = document.getElementById("namemsg");
+  input.focus();
+  document.getElementById("back").onclick = back;
+  document.getElementById("nameform").onsubmit = e => {
+    e.preventDefault();
+    if (!validName(input.value)) { msg.textContent = "Use up to 20 characters, including at least one letter or number."; msg.style.color = "var(--bad)"; return; }
+    saveName(input.value); done();
+  };
+}
+
 async function startDaily(m){
+  if (!myName) return askName({label:`${named(m)} · today's quiz`, button:"Start quiz", back:home, done:() => startDaily(m)});
   setMode(m); boardMode = m;
   app.innerHTML = `<div class="hero"><span class="label">${MODES[m].label} · daily</span><p>Starting today's quiz…</p></div>`;
   try {
@@ -331,7 +388,7 @@ async function resumeDaily(m){
   try {
     const d = await loadDaily(m), s = todaysRun(m);
     if (!s) return home();
-    run = {kind:"daily", mode:m, day:d.day, rounds:dailyRounds(d.quiz), i:s.i, score:s.score, log:s.log, pending:s.pending, done:s.done, posted:s.posted, postedName:s.postedName || ""};
+    run = {kind:"daily", mode:m, day:d.day, rounds:dailyRounds(d.quiz), i:s.i, score:s.score, log:s.log, pending:s.pending, done:s.done, posted:s.posted, postedName:s.postedName || "", postFailed:s.postFailed};
     if (run.pending === run.i) {                 // left mid-round: that round counts as a miss
       run.log.push({name:run.rounds[run.i].target.name, ok:false, pts:0, picked:null, left:true});
       run.i++; run.pending = null;
@@ -344,7 +401,7 @@ async function showDailyResults(m){
   try { await loadDaily(m); } catch(e) {}
   const s = todaysRun(m); if (!s) return home();
   setMode(m); boardMode = m;
-  run = {kind:"daily", mode:m, day:s.day, rounds:[], i:s.i, score:s.score, log:s.log, pending:null, done:true, posted:s.posted, postedName:s.postedName || ""};
+  run = {kind:"daily", mode:m, day:s.day, rounds:[], i:s.i, score:s.score, log:s.log, pending:null, done:true, posted:s.posted, postedName:s.postedName || "", postFailed:s.postFailed};
   finish();
 }
 async function startPractice(m){
@@ -463,12 +520,7 @@ function finish(){
   clearInterval(timerId);
   const hits = run.log.filter(l => l.ok).length, score = run.score, m = run.mode, isDaily = run.kind === "daily";
   const postBlock = !isDaily ? `<p class="note">Practice run · not on the leaderboard.</p>`
-    : run.posted ? `<p class="verdict ok">Posted as ${esc(run.postedName)}.</p>`
-    : `<form class="postform" id="postform" novalidate>
-        <label class="label" for="player">Name for today's leaderboard</label>
-        <div class="row"><input id="player" name="player" maxlength="20" autocomplete="nickname" placeholder="Your name" value="${esc(myName)}"><button class="btn" id="postbtn" type="submit">Post score</button></div>
-        <p class="note" id="postmsg"></p>
-      </form>`;
+    : `<div id="poststatus">${postStatusHTML()}</div>`;
   app.innerHTML = `
   <div class="bar"><span class="brand">${modeTag()}</span><span class="label">Run complete</span></div>
   <div class="hero" style="gap:6px">
@@ -493,24 +545,39 @@ function finish(){
   document.getElementById("practice").onclick = () => startPractice(m);
   const sbtn = document.getElementById("sharebtn"), smsg = document.getElementById("sharemsg");
   sbtn.onclick = () => share(sbtn, smsg);
-  const form = document.getElementById("postform");
-  if (form) {
-    const msg = document.getElementById("postmsg"), btn = document.getElementById("postbtn");
-    form.onsubmit = async e => {
-      e.preventDefault();
-      const name = document.getElementById("player").value.trim();
-      if (!name) { msg.textContent = "Enter a name first."; msg.style.color = "var(--bad)"; return; }
-      btn.disabled = true; msg.style.color = ""; msg.textContent = "Posting…";
-      try {
-        run.postedName = name; myName = name; store.set("wg-name", name);
-        const res = await postScore();
-        run.posted = true; saveRun();
-        form.outerHTML = `<p class="verdict ok">${res === "already" ? "Already posted from this browser today." : "Posted as " + esc(name) + "."}</p>`;
-        loadBoard(m);
-      } catch(err) { btn.disabled = false; msg.textContent = err.message; msg.style.color = "var(--bad)"; }
-    };
-  }
+  autoPost();
   loadBoard(m);
+}
+
+function postStatusHTML(err){
+  if (run.posted) return `<p class="verdict ok">On today's leaderboard as ${esc(run.postedName || myName)}.</p>`;
+  if (run.postFailed) return `<p class="note" style="color:var(--bad)">${esc(run.postFailed)}</p>`;
+  if (err) return `<p class="note" style="color:var(--bad)">${esc(err)}</p><div class="row"><button class="btn" id="retrypost">Try again</button></div>`;
+  if (myName) return `<p class="note">Posting to today's leaderboard as ${esc(myName)}…</p>`;
+  return `<form class="postform" id="nameform" novalidate>
+      <label class="label" for="player">Add your name to post this score</label>
+      <div class="row"><input id="player" name="player" maxlength="20" autocomplete="nickname" placeholder="Your name"><button class="btn" type="submit">Save name</button></div>
+      <p class="note" id="namemsg">You'll only need to do this once.</p>
+    </form>`;
+}
+async function autoPost(){
+  const rec = run, box = () => document.getElementById("poststatus");
+  const paint = err => { if (run !== rec || !box()) return; box().innerHTML = postStatusHTML(err); wirePost(); };
+  if (!rec || rec.kind !== "daily" || !rec.done || rec.posted || rec.postFailed) return paint();
+  if (!myName) return paint();
+  paint();
+  try { await postRun(rec.mode, rec); paint(); if (run === rec) loadBoard(rec.mode); }
+  catch(e) { paint(e.message); }
+}
+function wirePost(){
+  const retry = document.getElementById("retrypost"); if (retry) retry.onclick = autoPost;
+  const form = document.getElementById("nameform"); if (!form) return;
+  form.onsubmit = e => {
+    e.preventDefault();
+    const input = document.getElementById("player"), msg = document.getElementById("namemsg");
+    if (!validName(input.value)) { msg.textContent = "Use up to 20 characters, including at least one letter or number."; msg.style.color = "var(--bad)"; return; }
+    saveName(input.value); autoPost();
+  };
 }
 
 document.addEventListener("keydown", e => {
