@@ -165,9 +165,10 @@ function cropStyle(c){
 const PHOTO = id => "https://inaturalist-open-data.s3.amazonaws.com/photos/" + id.replace(".", "/medium.");
 const ROUNDS = 10, SECONDS = 15, SITE = "wildguess.vercel.app";
 const MODES = {
-  birds: {label:"Birds", count:658, blurb:"From backyard robins to birds-of-paradise"},
-  fish:  {label:"Fish",  count:403,  blurb:"From bluegill to leafy seadragons"}
+  birds: {label:"Birds", emoji:"🦜", count:658, blurb:"From backyard robins to birds-of-paradise"},
+  fish:  {label:"Fish",  emoji:"🐠", count:403,  blurb:"From bluegill to leafy seadragons"}
 };
+const named = m => `${MODES[m].emoji} ${MODES[m].label}`;
 const TIERS = {1:"Warm-up",2:"Field",3:"Tricky",4:"Expert"};
 const app = document.getElementById("app");
 const rand = a => a[Math.floor(Math.random()*a.length)];
@@ -251,7 +252,7 @@ function boardHTML(withTabs = true){
   else if (st === "loading") body = `<p class="note">Loading scores…</p>`;
   else if (!list.length) body = `<p class="note">No ${MODES[m].label.toLowerCase()} scores yet today. Finish today's quiz to take the top spot.</p>`;
   else body = `<ol>${list.map((b,i) => { const mine = me && b.name.toLowerCase() === me; return `<li class="${mine?"me":""}"><span class="r mono">${i+1}</span><span>${esc(b.name)}${mine?" (you)":""}</span><span class="mono">${fmt(b.score)}</span></li>`; }).join("")}</ol>`;
-  const tabs = withTabs ? `<div class="seg" role="group" aria-label="Leaderboard">${Object.keys(MODES).map(k => `<button type="button" data-board="${k}" aria-pressed="${k===m}">${MODES[k].label}</button>`).join("")}</div>` : "";
+  const tabs = withTabs ? `<div class="seg" role="group" aria-label="Leaderboard">${Object.keys(MODES).map(k => `<button type="button" data-board="${k}" aria-pressed="${k===m}">${named(k)}</button>`).join("")}</div>` : "";
   return `<section class="board" id="board"><div class="head"><h2>${withTabs ? "Today's leaderboard" : MODES[m].label + " · today's leaderboard"}</h2>${tabs}</div><p class="note">${day} · resets at 4am Eastern</p>${body}</section>`;
 }
 function rerenderBoard(){ const el = document.getElementById("board"); if (!el) return; el.outerHTML = boardHTML(!run); wireBoard(); }
@@ -271,7 +272,7 @@ function dailyCard(k){
   else if (s && s.done) { tag = "Played"; action = "results"; status = `${s.log.filter(l => l.ok).length}/10 · ${fmt(s.score)} points${s.posted ? "" : " · not posted yet"}. See your results.`; }
   else if (s) { tag = "Resume"; action = "resume"; status = `You're on round ${Math.min(s.i + 1 + (s.pending === s.i ? 1 : 0), ROUNDS)} of 10.`; }
   else if (d.status) { tag = "Played"; action = "none"; status = "You've already played today's quiz on this browser."; }
-  return `<button class="mode ${k}" data-daily="${k}" data-action="${action}" ${action === "none" ? "disabled" : ""}><i>${tag}</i><strong>${v.label}</strong><span>${status}</span></button>`;
+  return `<button class="mode ${k}" data-daily="${k}" data-action="${action}" ${action === "none" ? "disabled" : ""}><i>${tag}</i><strong>${named(k)}</strong><span>${status}</span></button>`;
 }
 
 async function home(){
@@ -290,7 +291,7 @@ async function home(){
     ${boardHTML()}
     <section class="practice">
       <div><strong>Practice</strong><span class="note">Unlimited random runs. Not on the leaderboard.</span></div>
-      <div class="row">${Object.entries(MODES).map(([k,v]) => `<button class="btn alt" data-practice="${k}">${v.label}</button>`).join("")}</div>
+      <div class="row">${Object.entries(MODES).map(([k,v]) => `<button class="btn alt" data-practice="${k}">${named(k)}</button>`).join("")}</div>
     </section>
     <div class="steps">
       <div><strong>Read the name</strong>Each round shows one species name.</div>
@@ -374,7 +375,7 @@ async function show(){
   }
   play();
 }
-const modeTag = () => `${MODES[run.mode].label} · ${run.kind === "daily" ? "Daily " + dayLabel(run.day) : "Practice"}`;
+const modeTag = () => `${named(run.mode)} · ${run.kind === "daily" ? "Daily " + dayLabel(run.day) : "Practice"}`;
 
 function play(){
   const rd = run.rounds[run.i], r = run.i + 1;
@@ -443,7 +444,7 @@ function answer(k){
 
 function shareText(){
   const hits = run.log.filter(l => l.ok).length;
-  return `Wild Guess · ${MODES[run.mode].label} · ${dayLabel(run.day)}\n${hits}/10 · ${fmt(run.score)} pts\n${run.log.map(l => l.ok ? "🟩" : "🟥").join("")}\n${SITE}`;
+  return `Wild Guess ${MODES[run.mode].emoji} ${MODES[run.mode].label} · ${dayLabel(run.day)}\n${hits}/10 · ${fmt(run.score)} pts\n${run.log.map(l => l.ok ? "🟩" : "🟥").join("")}\n${SITE}`;
 }
 async function share(btn, msg){
   const text = shareText();
