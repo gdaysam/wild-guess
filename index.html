@@ -580,6 +580,17 @@ function wirePost(){
   };
 }
 
+/* Phones and sleeping laptops pause background tabs, so a page left open overnight can miss the 4am rollover
+   timer. Whenever the page comes back into view, reload if the day has turned, otherwise refresh the board. */
+function dayHasTurned(){ const d = daily.birds || daily.fish; return !!d && Date.now() >= d.loadedAt + d.msLeft; }
+function onReturn(){
+  if (document.visibilityState !== "visible") return;
+  if (dayHasTurned()) { if (!run) location.reload(); return; }   // mid-run: home() fetches the new day when they get there
+  if (!run) loadBoard(boardMode);
+}
+document.addEventListener("visibilitychange", onReturn);
+window.addEventListener("pageshow", e => { if (e.persisted) onReturn(); });
+
 document.addEventListener("keydown", e => {
   if (!run || !run.rounds.length || e.metaKey || e.ctrlKey) return;
   if (!run.locked && "1234".includes(e.key)) answer(+e.key - 1);
